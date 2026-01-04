@@ -1,77 +1,56 @@
-// server.js
-const http = require('http');
-const { Server } = require('socket.io');
-const server = http.createServer();
-const io = new Server(server, { cors: { origin: '*' } });
+import { createServer } from "http";
+import { createSchema, createYoga, createPubSub } from "graphql-yoga";
+import { WebSocketServer } from 'ws'; //
+import { useServer } from 'graphql-ws/use/ws'; //
 
-// Store messages for each room
-const roomMessages = new Map();
+const pubSub = createPubSub();
+const messages = [];
 
-io.on('connection', (socket) => {
-
-  
-  // Handle joining rooms
-  socket.on('join_room', (roomId) => {
-    socket.join(roomId);
-   
-    
-    // Send existing messages for this room
-    if (roomMessages.has(roomId)) {
-      socket.emit('messages', roomMessages.get(roomId));
+const yoga = createYoga({
+  schema: createSchema({
+    typeDefs: /* GraphQL */ `
+      type Message { id: ID!, user: String!, content: String! }
+      type Query { messages: [Message!] }
+      type Mutation { postMessage(user: String!, content: String!): ID! }
+      type Subscription { messageAdded: Message! }
+    `,
+    resolvers: {
+      Query: { messages: () => messages },
+      Mutation: {
+        postMessage: (parent, { user, content }) => {
+          const newMessage = { id: String(messages.length), user, content };
+          messages.push(newMessage);
+          pubSub.publish("MESSAGE_ADDED", { messageAdded: newMessage });
+          return newMessage.id;
+        }
+      },
+      Subscription: {
+        messageAdded: { subscribe: () => pubSub.subscribe("MESSAGE_ADDED") }
+      }
     }
-  });
-  
-  // Handle messages
-  socket.on('message', (data) => {
-    console.log('Message received Successfully');
-    
-    const { room, message } = data;
-    
-    if (!room || !message) {
-      console.error('Invalid message format');
-      return;
-    }
-    
-    // Store message in room
-    if (!roomMessages.has(room)) {
-      roomMessages.set(room, []);
-    }
-    roomMessages.get(room).push(message);
-    
-    // Broadcast to room
-    io.to(room).emit('message', message);
-    console.log('Message sent to room');
-  });
-  
-  // Handle getting messages for a room
-  socket.on('get_messages', (data) => {
-    const roomId = data.room || 'UserA-UserB'; // Default room
-    if (roomMessages.has(roomId)) {
-      socket.emit('messages', roomMessages.get(roomId));
-    } else {
-      socket.emit('messages', []);
-    }
-  });
-  
-  socket.on('disconnect', () => {
-    console.log('Client disconnected !!!!');
-  });
-  
-  socket.on('isSeen', (data) => {
-    console.log('isSeen event received:', data);
-    // Handle the isSeen event
-    if (data.isSeen) {
-      socket.emit('status', { status: 'seen' });
-    } else if (data.isDelivered) {
-      socket.emit('status', { status: 'delivered' });
-    } else {
-      socket.emit('status', { status: 'error' });
-    }
-  });
-  
+  })
 });
+
+const server = createServer(yoga);
+
+// Add WebSocket support on the same path as GraphQL
+const wsServer = new WebSocketServer({
+  server,
+  path: yoga.graphqlEndpoint
+});
+
+useServer({
+  execute: (args) => args.rootValue.execute(args),
+  subscribe: (args) => args.rootValue.subscribe(args),
+  onSubscribe: async (ctx, msg) => {
+    const { schema, execute, subscribe, contextFactory, parse, validate } = yoga.getEnveloped({
+      ctx, req: ctx.extra.request, socket: ctx.extra.socket, params: msg.payload
+    });
+    return { schema, execute, subscribe, contextValue: await contextFactory(), ...msg.payload };
+  }
+}, wsServer);
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log('Socket.IO server running on port 3000');
-  console.log('Visit http://localhost:3000 in your browser');
+  console.log('Server is running ....');
 });

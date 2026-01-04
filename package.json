@@ -7,13 +7,16 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node --watch  server.js"
   },
+  "type": "module",
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "dotenv": "^17.2.3",
     "express": "^5.1.0",
-    "http": "^0.0.1-security",
-    "node": "^24.6.0",
-    "socket.io": "^4.8.1"
+    "graphql": "^16.12.0",
+    "graphql-ws": "^6.0.6",
+    "graphql-yoga": "^5.18.0",
+    "ws": "^8.18.3"
   }
 }
