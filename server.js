@@ -18,10 +18,10 @@ const yoga = createYoga({
       Query: { messages: () => messages },
       Mutation: {
         postMessage: (parent, { user, content }) => {
-          const newMessage = { id: String(messages.length), user, content };
+          const newMessage = { id: String(messages.length), user, content,createdAt: new Date().toISOString() };
           messages.push(newMessage);
           pubSub.publish("MESSAGE_ADDED", { messageAdded: newMessage });
-          return newMessage.id;
+          return newMessage;
         }
       },
       Subscription: {
@@ -50,7 +50,6 @@ useServer({
   }
 }, wsServer);
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log('Server is running ....');
+server.listen(4000, () => {
+  console.log('Server is running on http://localhost:4000/graphql');
 });
