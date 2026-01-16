@@ -4,61 +4,67 @@ import { WebSocketServer } from 'ws';
 import { useServer } from 'graphql-ws/use/ws';
 
 const pubSub = createPubSub();
-const messages = [];
+// This is your "Database" (In-Memory). 
+// Messages stay here as long as the server runs.
+const messages = []; 
 
 const yoga = createYoga({
   schema: createSchema({
     typeDefs: /* GraphQL */ `
       type Message {
         id: ID!
+        roomId: String!  # Logic to separate chats
         user: String!
         content: String!
         createdAt: String!
       }
 
       type Query {
-        messages: [Message!]!
+        # Fetch history for a specific room only
+        messages(roomId: String!): [Message!]!
       }
 
       type Mutation {
-        # FIXED: Returns the full Message object, not just an ID
-        postMessage(user: String!, content: String!): Message!
+        postMessage(roomId: String!, user: String!, content: String!): Message!
       }
 
       type Subscription {
-        messageAdded: Message!
+        # Listen for updates in a specific room
+        messageAdded(roomId: String!): Message!
       }
     `,
     resolvers: {
       Query: {
-        messages: () => messages,
+        // Filter the global list to return only this room's messages
+        messages: (_, { roomId }) => messages.filter(m => m.roomId === roomId),
       },
       Mutation: {
-        postMessage: (parent, { user, content }) => {
+        postMessage: (_, { roomId, user, content }) => {
           const newMessage = {
             id: String(messages.length),
+            roomId,
             user,
             content,
             createdAt: new Date().toISOString(),
           };
           messages.push(newMessage);
           
-          // Publish to subscribers
-          pubSub.publish("MESSAGE_ADDED", { messageAdded: newMessage });
+          // Publish ONLY to people listening to this roomId
+          pubSub.publish(`MESSAGE_ADDED_${roomId}`, { messageAdded: newMessage });
           
-          // Return the full object to the mutation caller
           return newMessage;
         },
       },
       Subscription: {
         messageAdded: {
-          subscribe: () => pubSub.subscribe("MESSAGE_ADDED"),
+          // Subscribe ONLY to the specific room channel
+          subscribe: (_, { roomId }) => pubSub.subscribe(`MESSAGE_ADDED_${roomId}`),
         },
       },
     },
   }),
   graphiql: {
-    subscriptionsProtocol: 'WS', // Forces GraphiQL to use WebSocket for subscriptions
+    subscriptionsProtocol: 'WS',
   },
 });
 
@@ -82,19 +88,14 @@ useServer(
           params: msg.payload,
         });
 
-      const args = {
+      return {
         schema,
         operationName: msg.payload.operationName,
         document: parse(msg.payload.query),
         variableValues: msg.payload.variables,
         contextValue: await contextFactory(),
-        rootValue: {
-          execute,
-          subscribe,
-        },
+        rootValue: { execute, subscribe },
       };
-
-      return args;
     },
   },
   wsServer
