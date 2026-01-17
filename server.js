@@ -50,9 +50,16 @@ const yoga = createYoga({
         content: String!
         createdAt: String!
       }
+        type UserChat {
+        room_id: String!
+        contact_name: String!
+        last_message: String!
+        created_at: String!
+      }
 
       type Query {
         messages(roomId: String!): [Message!]!
+        user_chats_view(user: String!): [UserChat!]!
       }
 
       type Mutation {
@@ -75,6 +82,29 @@ const yoga = createYoga({
               content: decrypt(m.content) 
             }));
         },
+        user_chats_view: (_, { user }) => {
+          // Filter messages where I am the sender OR receiver
+          const myMessages = messages.filter(m => m.user === user || m.to === user);
+          
+          // Group by Room ID to find the latest message
+          const rooms = {};
+          myMessages.forEach(m => {
+            // If room doesn't exist OR this message is newer, replace it
+            if (!rooms[m.roomId] || new Date(m.createdAt) > new Date(rooms[m.roomId].createdAt)) {
+              rooms[m.roomId] = m;
+            }
+          });
+
+          // Convert to List and Format
+          return Object.values(rooms).map(m => ({
+            room_id: m.roomId,
+            // If I sent it, the contact is 'to'. If they sent it, contact is 'user'
+            contact_name: m.user === user ? m.to : m.user,
+            // Decrypt so the list shows readable text
+            last_message: decrypt(m.content),
+            created_at: m.createdAt
+          })).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); // Sort newest first
+        }
       },
       Mutation: {
         postMessage: (_, { roomId, user, to, content }) => {
