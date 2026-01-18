@@ -4,16 +4,65 @@ import { WebSocketServer } from 'ws';
 import { useServer } from 'graphql-ws/use/ws';
 // 1. Import Crypto for encryption
 import { randomBytes, createCipheriv, createDecipheriv } from 'crypto';
+// 2. Import File System and Path for persistence
+import fs from 'fs';
+import path from 'path';
+import 'dotenv/config'; // Load environment variables
 
 const pubSub = createPubSub();
-const messages = []; 
+
+// --- 3. PERSISTENT STORAGE SETUP ---
+// We will save messages to a file named 'messages.json' in the same folder as this script
+const DATA_FILE = path.join(process.cwd(), 'messages.json');
+
+// Helper to load messages from disk
+function loadMessages() {
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      const data = fs.readFileSync(DATA_FILE, 'utf-8');
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.error("Could not load messages:", err);
+  }
+  return [];
+}
+
+// Helper to save messages to disk
+function saveMessages(data) {
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.error("Could not save messages:", err);
+  }
+}
+
+// Initialize messages from the file instead of an empty array
+const messages = loadMessages(); 
+// -----------------------------------
 
 // --- ENCRYPTION SETUP ---
-// We generate a fresh key every time the server starts. 
-// Since your DB is in-memory, this is perfect (key dies with the data).
 const algorithm = 'aes-256-cbc';
-const secretKey = randomBytes(32); 
 const ivLength = 16;
+
+// 4. Use a persistent key from .env, or fallback to random (data loss risk)
+// The key in .env should be a 64-character hex string (32 bytes)
+let secretKey;
+
+if (process.env.CHAT_SECRET_KEY) {
+  try {
+    secretKey = Buffer.from(process.env.CHAT_SECRET_KEY, 'hex');
+    if (secretKey.length !== 32) {
+      throw new Error("Invalid key length");
+    }
+  } catch (e) {
+    console.error("Error reading CHAT_SECRET_KEY. Falling back to random key (Old messages will be unreadable).");
+    secretKey = randomBytes(32);
+  }
+} else {
+  console.warn("WARNING: CHAT_SECRET_KEY not found in .env. Using random key. Messages will be lost on restart.");
+  secretKey = randomBytes(32);
+}
 
 function encrypt(text) {
   const iv = randomBytes(ivLength);
@@ -50,16 +99,9 @@ const yoga = createYoga({
         content: String!
         createdAt: String!
       }
-        type UserChat {
-        room_id: String!
-        contact_name: String!
-        last_message: String!
-        created_at: String!
-      }
 
       type Query {
         messages(roomId: String!): [Message!]!
-        user_chats_view(user: String!): [UserChat!]!
       }
 
       type Mutation {
@@ -74,7 +116,7 @@ const yoga = createYoga({
     resolvers: {
       Query: {
         messages: (_, { roomId }) => {
-          // 2. Decrypt messages on-the-fly when requested
+          // Decrypt messages on-the-fly when requested
           return messages
             .filter(m => m.roomId === roomId)
             .map(m => ({
@@ -82,33 +124,10 @@ const yoga = createYoga({
               content: decrypt(m.content) 
             }));
         },
-        user_chats_view: (_, { user }) => {
-          // Filter messages where I am the sender OR receiver
-          const myMessages = messages.filter(m => m.user === user || m.to === user);
-          
-          // Group by Room ID to find the latest message
-          const rooms = {};
-          myMessages.forEach(m => {
-            // If room doesn't exist OR this message is newer, replace it
-            if (!rooms[m.roomId] || new Date(m.createdAt) > new Date(rooms[m.roomId].createdAt)) {
-              rooms[m.roomId] = m;
-            }
-          });
-
-          // Convert to List and Format
-          return Object.values(rooms).map(m => ({
-            room_id: m.roomId,
-            // If I sent it, the contact is 'to'. If they sent it, contact is 'user'
-            contact_name: m.user === user ? m.to : m.user,
-            // Decrypt so the list shows readable text
-            last_message: decrypt(m.content),
-            created_at: m.createdAt
-          })).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); // Sort newest first
-        }
       },
       Mutation: {
         postMessage: (_, { roomId, user, to, content }) => {
-          // 3. Encrypt content BEFORE storing
+          // Encrypt content BEFORE storing
           const encryptedContent = encrypt(content);
 
           const storedMessage = {
@@ -122,7 +141,10 @@ const yoga = createYoga({
           
           messages.push(storedMessage);
           
-          // 4. Send PLAINTEXT to live subscribers (so they can read it)
+          // 5. Save to disk immediately so we don't lose it on crash/restart
+          saveMessages(messages); 
+          
+          // Send PLAINTEXT to live subscribers (so they can read it immediately)
           const publicMessage = { ...storedMessage, content }; 
 
           pubSub.publish(`MESSAGE_ADDED_${roomId}`, { messageAdded: publicMessage });
@@ -181,5 +203,5 @@ useServer(
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}/graphql`);
+  console.log('Server is running on http://localhost:4000/graphql');
 });
